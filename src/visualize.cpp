@@ -1,4 +1,4 @@
-#include <graphslam/visualize.h>
+#include <la-slam/visualize.h>
 // 本例演示了如何画出一个预先存储的轨迹
 
 using namespace std;

@@ -1,86 +1,11 @@
-#include "graphslam/vo.h"
-#include "graphslam/visualize.h"
+// VO implementation of:
+// Nistér, D. (2004). An efficient solution to the five-point relative pose
+// problem. IEEE Transactions on Pattern Analysis and Machine Intelligence, 26,
+// 756-770.
+
+#include "la-slam/vo.h"
 
 using namespace std;
-
-bool parse_cameras(CameraCfgPtrMap& cfg_ptr) {
-    ifstream fin(CAMERA_CFG);
-    if(!fin) {
-        cout << "path doesn't exist: " << CAMERA_CFG << endl; 
-        return false;
-    }
-    while(!fin.eof() && !fin.bad()) {
-        string line;
-        getline(fin,line);
-
-        if(line.size() == 0 || line[0] == '#') {
-            continue;
-        }
-
-        string model_str;
-        auto cfg = make_shared<CameraCfg>();
-        istringstream cam_stream(line);
-        cam_stream >> cfg->id >> model_str
-                    >> cfg->w >> cfg->h;
-        vector<double> params;
-        while (!cam_stream.eof() && !cam_stream.bad()) {
-              params.emplace_back();
-              cam_stream >> params.back();
-        }
-        cfg->model = PinholeCameraModel(params);
-        // cout << cfg->id << endl;
-        cfg_ptr.insert(std::make_pair(cfg->id, cfg));
-    }
-    return true;
-}
-
-
-bool parse_images(vector<Image::Ptr>& im_vec) { 
-
-    ifstream fin(IMG_CFG);
-
-    if(!fin) {
-        cout << "path doesn't exist: " << IMG_CFG << endl; 
-        return false;
-    } 
-    int cnt = 0;
-    while(!fin.eof() && !fin.bad() && im_vec.size() <= MAX_IMG_CNT) {
-        string line; getline(fin,line); 
-        if(line.size() == 0 || line[0] == '#') {
-            continue;
-        }
-
-        string img_file;
-        auto im = make_shared<Image>();
-        double qw, qx, qy, qz;
-        istringstream img_stream(line);
-        img_stream >> im->id
-            >> qw >> qx >> qy >> qz
-            >> im->T_cam_global.translation()[0] 
-            >> im->T_cam_global.translation()[1] 
-            >> im->T_cam_global.translation()[2] 
-            >> im->cam_id >> img_file;
-        im->T_cam_global.linear() = Eigen::Quaterniond(qw, qx, qy, qz).matrix();
-        im->T_global_cam = im->T_cam_global.inverse(); 
-        stringstream img_file_stream;
-        img_file_stream << IMGS_DIR << "/" << img_file;
-        img_file = img_file_stream.str();
-        im->im = cv::imread(img_file);
-
-        if(im->im.data == nullptr) {
-            cout << "file does not exist" << img_file << endl;
-            continue;
-        }
-
-        im_vec.push_back(im);
-        cnt++;
-        getline(fin,line); // skip observations
-    }
-    fin.close();
-
-    return true;
-}
-
 
 void generate_features(Image::Ptr im) {
     vector<cv::KeyPoint> keypoints;
@@ -90,219 +15,449 @@ void generate_features(Image::Ptr im) {
     detector->detect(im->im, keypoints);
     descriptor->compute(im->im, keypoints, im->descriptors);
 
-    for(int i = 0; i < keypoints.size(); i++) {
+    for (int i = 0; i < keypoints.size(); i++) {
         Feature::Ptr f(new Feature(im, keypoints[i]));
         im->features.push_back(f);
     }
 }
 
-void triangulate_dlt(vector<cv::Point2f>& pts1, vector<cv::Point2f>& pts2, Eigen::Matrix<double,3,4>& P1, Eigen::Matrix<double,3,4>& P2, Eigen::Vector4d& X) {
-    const int MATCHES = 20;
-    pts1.resize(MATCHES);
-    pts2.resize(MATCHES);
-
-    Eigen::Matrix<double, MATCHES * 4, 4> A = Eigen::Matrix<double, MATCHES * 4, 4>::Zero();
-    cv::Point2f com1(0,0), com2(0,0);
-    double scale1 = 0, scale2 = 0;
-
-    for(int i = 0; i < pts1.size(); i++) {
-        com1 += pts1[i];
-        com2 += pts2[i];
-    }
-    com1 *= 1./pts1.size();
-    com2 *= 1./pts2.size();
-    
-    for(int i = 0; i < pts1.size(); i++) {
-        cv::Point2f centered_pt = pts1[i] - com1;
-        scale1 += sqrt(centered_pt.x * centered_pt.x + centered_pt.y * centered_pt.y);
-
-        centered_pt = pts2[i] - com2;
-        scale2 += sqrt(centered_pt.x * centered_pt.x + centered_pt.y * centered_pt.y);
-    }
-
-    scale1 *= 1./pts1.size();
-    scale2 *= 1./pts2.size();
-
-    scale1 = sqrt(2)/scale1;
-    scale2 = sqrt(2)/scale2;
-
-    for(int i = 0; i < pts1.size(); i++) {
-        cv::Point2d p1 = pts1[i] - com1, p2 = pts2[i] - com2;
-        p1 *= scale1;
-        p2 *= scale2;
-        //cv::Point2d p1 = pts1[i], p2 = pts2[i];
-
-        Eigen::Matrix4d A_i;
-        A_i << p1.x * P1.row(2) - P1.row(0),
-                            p1.y * P1.row(2) - P1.row(1), 
-                            p2.x * P2.row(2) - P2.row(0), 
-                            p2.y * P2.row(2) - P2.row(1); 
-        A.block<4,4>(i,0) = A_i;
-    }
-
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinV);
-    Eigen::Matrix3d T_denorm_1, T_denorm_2;
-    T_denorm_1 << scale1, 0, -scale1*com1.x, 0, scale1, -scale1*com1.y, 0, 0, 1;
-    T_denorm_2 << scale2, 0, -scale2*com2.x, 0, scale2, -scale2*com2.y, 0, 0, 1;
-
-    X = svd.matrixV().rightCols<1>();
-    X /= X(3);
-    //cout << "x" << endl << X.head<3>() << endl;
-    //X.head<3>() << T_denorm_2.inverse() *  * T_denorm_1 X.head<3>();
-
-}
-
-bool epipolar_constraints(CameraCfgPtrMap& cam_cfg_map, Image::Ptr im1, Image::Ptr im2, Eigen::Matrix4d& T) {
-    std::vector<cv::DMatch> matches, good_matches;
-    cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create("BruteForce-Hamming");
+void generate_matches(Image::Ptr im1, Image::Ptr im2,
+                      vector<Feature::Ptr> &feats1,
+                      vector<Feature::Ptr> &feats2) {
+    vector<cv::DMatch> matches, good_matches;
+    cv::Ptr<cv::DescriptorMatcher> matcher =
+        cv::DescriptorMatcher::create("BruteForce-Hamming");
     matcher->match(im1->descriptors, im2->descriptors, matches);
 
-    sort(matches.begin(), matches.end(), 
-        [](cv::DMatch l, cv::DMatch r) {
-            return l.distance < r.distance;
-        }
-    );
+    sort(matches.begin(), matches.end(),
+         [](cv::DMatch l, cv::DMatch r) { return l.distance < r.distance; });
 
-    vector<cv::Point2f> pts1, pts2;
-    for(int i = 0; i < matches.size(); i++) {
-        int p1_i = matches[i].trainIdx, p2_i = matches[i].queryIdx;
-        if(matches[i].distance <= std::max(2.0 * matches[0].distance, 30.0)) {
-            pts1.push_back(im1->features[p1_i]->kp.pt);
-            pts2.push_back(im2->features[p2_i]->kp.pt);
-            good_matches.push_back(matches[i]);
+    for (auto match : matches) {
+        if (match.distance <= max(2.0 * matches[0].distance, 30.0)) {
+            good_matches.push_back(match);
+        } else {
+            im1->features[match.queryIdx]->is_outlier = true;
+            im2->features[match.trainIdx]->is_outlier = true;
         }
     }
 
-    /*
-    vector<cv::KeyPoint> kps1,kps2;
-    for(int i = 0; i < im1->features.size(); i++) kps1.push_back(im1->features[i]->kp);
-    for(int i = 0; i < im2->features.size(); i++) kps2.push_back(im2->features[i]->kp);
+    random_shuffle(good_matches.begin(), good_matches.end());
+    vector<cv::KeyPoint> kps1, kps2;
+    for (auto match : good_matches) {
+        feats1.push_back(im1->features[match.queryIdx]);
+        feats2.push_back(im2->features[match.trainIdx]);
+    }
+    for (auto f : im1->features)
+        kps1.push_back(f->kp);
+    for (auto f : im2->features)
+        kps2.push_back(f->kp);
+
     cv::Mat img_match;
-    cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match); 
+    cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match);
     cv::imshow("all matches", img_match);
     cv::waitKey(0);
-    */
-
-    PinholeCameraModel K1 = cam_cfg_map[im1->cam_id]->model;
-    PinholeCameraModel K2 = cam_cfg_map[im1->cam_id]->model;
-
-    cv::Point2d principal_pt(K1.cx,K1.cy);
-    cv::Mat E_cv = cv::findEssentialMat(pts1,pts2,K1.fx,principal_pt);
-    Eigen::Map<Eigen::Matrix<double,3,3,Eigen::RowMajor> > E( (double*)E_cv.data ); 
-
-    //cout << "E =" << std::endl << E << endl;
-    //cout << "det(E) =" << std::endl << E.determinant() << endl;
-
-    Eigen::JacobiSVD<Eigen::Matrix3d> svd(E, Eigen::ComputeFullU | Eigen::ComputeFullV);
-    Eigen::Matrix3d sigma = Eigen::Matrix3d::Zero();
-    sigma.diagonal() << svd.singularValues();
-    //cout << "sigma =" << std::endl << sigma << endl;
-    
-    double POSSIBLE_ANGLES[2] = {-M_PI/2,M_PI/2};
-    Eigen::Vector3d axis(0,0,1);
-    Eigen::Matrix4d T_11 = Eigen::Matrix4d::Identity();
-    Eigen::Matrix4d T_12 = Eigen::Matrix4d::Identity();
-    Eigen::Matrix3d R_mat, t_skew;
-    Eigen::Vector3d t;
-
-    bool found = false;
-    for(double R_angle : POSSIBLE_ANGLES) {
-        Eigen::AngleAxis<double> R_rot(R_angle, axis);
-        for(double t_angle : POSSIBLE_ANGLES) {
-            Eigen::AngleAxis<double> t_rot(t_angle, axis);
-
-            R_mat = svd.matrixU() * (R_rot.toRotationMatrix().transpose() 
-                                    * svd.matrixV().transpose());
-            t_skew = svd.matrixU() * (t_rot.toRotationMatrix() 
-                                    * (sigma * svd.matrixU().transpose()));
-            t << t_skew(1,2) * -1, t_skew(0,2), t_skew(1,0);
-
-            T_12 = Eigen::Matrix4d::Identity();
-            T_12.topLeftCorner<3,3>() = R_mat;
-            T_12.topRightCorner<3,1>() = t;
-
-            Eigen::Matrix<double,3,4> K1_hat = Eigen::Matrix<double,3,4>::Zero();
-            Eigen::Matrix<double,3,4> K2_hat = Eigen::Matrix<double,3,4>::Zero();
-            K1_hat.topLeftCorner<3,3>() = K1.K;
-            K2_hat.topLeftCorner<3,3>() = K2.K;
-
-            Eigen::Matrix<double,3,4> P1 = K1_hat * T_11, P2 = K2_hat * T_12;
-            Eigen::Vector4d X = Eigen::Vector4d::Ones();
-            triangulate_dlt(pts1,pts2,P1, P2, X);
-
-            //cout << "X=" << endl << X << endl;
-
-            int positive_cnt = 0;
-            for(int i = 0; i < 3; i++) if(X(i) > 0) positive_cnt++;
-            if(positive_cnt == 2) {
-                T = T_12;
-                found = true; 
-                break;
-            } 
-        }
-        if(found) {
-            break;
-        }
-    }
-
-    //cout << "T=" << endl << T << endl;
-
-    for(int i = 0; i < pts1.size(); i++) {
-       cv::Point2d p1 = pts1[i], p2 = pts2[i];
-       Eigen::Vector3d uv1, uv2;
-       uv1 << p1.x,p1.y,1;
-       uv2 << p2.x,p2.y,1;
-       Eigen::Vector3d uv_norm_1, uv_norm_2;
-       uv_norm_1 = K1.deproject(uv1);
-       uv_norm_2 = K1.deproject(uv2);
-       //cout << "epipolar_constraints: " << uv_norm_2.transpose() * t_skew * R_mat * uv_norm_1 << endl; 
-    } 
-
-    return found;
 }
 
+// compute poly mult [x,y,z,1] x [x,y,z,1]
+// out = [x2,y2,z2,xy,xz,yz,x,y,1]
+Eigen::Matrix<double, 10, 1> p1p1(Eigen::Vector4d a, Eigen::Vector4d b) {
+    Eigen::Matrix<double, 10, 1> out = Eigen::Matrix<double, 10, 1>::Zero();
+    out(0) = a(0) * b(0);               // x2
+    out(1) = a(1) * b(1);               // y2
+    out(2) = a(2) * b(2);               // z2
+    out(3) = a(0) * b(1) + a(1) * b(0); // xy
+    out(4) = a(0) * b(2) + a(2) * b(0); // xz
+    out(5) = a(1) * b(2) + a(2) * b(1); // yz
+    out(6) = a(3) * b(0) + a(0) * b(3); // x
+    out(7) = a(3) * b(1) + a(1) * b(3); // y
+    out(8) = a(3) * b(2) + a(2) * b(3); // z
+    out(9) = a(3) * b(3) + a(3) * b(3); // 1
+    return out;
+}
 
+// compute poly mult [z3,z2,z,1] x [z3,z2,z,1]
+// z2,z,1
+// z2,z,1
+// z4,z3,z2
+// z3,z2,z
+// z2,z,1
+template <int len1, int len2>
+Eigen::Matrix<double, len1 + len2 - 1, 1>
+poly_mult(Eigen::Matrix<double, len1, 1> a, Eigen::Matrix<double, len2, 1> b) {
+    Eigen::Matrix<double, len1 + len2 - 1, 1> out =
+        Eigen::Matrix<double, len1 + len2 - 1, 1>::Zero();
+    for (int i = 0; i < len1; i++) {
+        for (int j = 0; j < len2; j++) {
+            out(len1 + len2 - 2 - i - j) += a(len1 - 1 - i) * b(len2 - 1 - j);
+        }
+    }
+    return out;
+}
 
-int main(int argc, char** argv) {
+template <int len>
+double eval_poly_at(Eigen::Matrix<double, len, 1> p, double val) {
+    double out = 0;
+    for (int i = 0; i < len; i++) {
+        out += p(len - 1 - i) * pow(val, i);
+    }
+    return out;
+}
 
-    CameraCfgPtrMap cam_cfg_map;
-    vector<Image::Ptr> im_vec;
+// Computes out = a - z * b
+// a,b = [z2x,zx,x,z2y,zy,y,z3,z2,z,1]
+// zb = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
+// out = [z3x,z2x,zx,x,z3y,z2y,zy,y,z4,z3,z2,z,1]
+Eigen::Matrix<double, 13, 1> sub_z3z4(Eigen::Matrix<double, 10, 1> a,
+                                      Eigen::Matrix<double, 10, 1> b) {
+    Eigen::Matrix<double, 13, 1> out = Eigen::Matrix<double, 13, 1>::Zero();
+    out(0) = -b(0);        // z3x
+    out(1) = a(0) - b(1);  // z2x
+    out(2) = a(1) - b(2);  // zx
+    out(3) = a(2);         // x
+    out(4) = -b(3);        // z3y
+    out(5) = a(3) - b(4);  // z2y
+    out(6) = a(4) - b(5);  // zy
+    out(7) = a(5);         // y
+    out(8) = -b(6);        // z4
+    out(9) = a(6) - b(7);  // z3
+    out(10) = a(7) - b(8); // z2
+    out(11) = a(8) - b(9); // z
+    out(12) = a(9);        // 1
+    return out;
+}
 
-    Trajectory3D poses;
-    Trajectory3D poses_gt;
+// compute poly mult a * b
+// a = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
+// b = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
+// out = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
 
-    parse_cameras(cam_cfg_map);
-    parse_images(im_vec);
-    
-    Eigen::Isometry3d Twr;
-    Twr.translation() = im_vec[0]->T_global_cam.translation();
-    Twr.linear() = im_vec[0]->T_global_cam.rotation();
+// compute poly mult [x2,y2,z2,xy,xz,yz,x,y,1] * [x,y,z,1]
+// out = [x3,y3,z3,x2y,y2x,x2z,z2x,z2y,y2z,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
+Eigen::Matrix<double, 20, 1> p2p1(Eigen::Matrix<double, 10, 1> a,
+                                  Eigen::Vector4d b) {
+    Eigen::Matrix<double, 20, 1> out = Eigen::Matrix<double, 20, 1>::Zero();
+    out(0) = a(0) * b(0);                              // x3
+    out(1) = a(1) * b(1);                              // y3
+    out(2) = a(2) * b(2);                              // z3
+    out(3) = a(0) * b(1) + a(3) * b(0);                // x2y
+    out(4) = a(1) * b(0) + a(3) * b(1);                // y2x
+    out(5) = a(0) * b(2) + a(4) * b(0);                // x2z
+    out(6) = a(2) * b(0) + a(4) * b(2);                // z2x
+    out(7) = a(1) * b(2) + a(5) * b(1);                // z2y
+    out(8) = a(2) * b(1) + a(5) * b(2);                // y2z
+    out(9) = a(3) * b(2) + a(4) * b(1) + a(5) * b(0);  // xyz
+    out(10) = a(0) * b(3) + a(6) * b(0);               // x2
+    out(11) = a(1) * b(3) + a(7) * b(1);               // y2
+    out(12) = a(2) * b(3) + a(8) * b(2);               // z2
+    out(13) = a(3) * b(3) + a(6) * b(1) + a(7) * b(0); // xy
+    out(14) = a(4) * b(3) + a(6) * b(2) + a(8) * b(0); // xz
+    out(15) = a(5) * b(3) + a(7) * b(2) + a(8) * b(1); // yz
+    out(16) = a(6) * b(3) + a(9) * b(0);               // x
+    out(17) = a(7) * b(3) + a(9) * b(1);               // y
+    out(18) = a(8) * b(3) + a(9) * b(2);               // z
+    out(19) = a(9) * b(3);                             // 1
+    return out;
+}
 
-    poses.push_back(Twr);
+Eigen::Matrix<double, 10, 1> upper_tri_at(Eigen::Matrix<double, 9, 4> M, int i,
+                                          int j) {
+    Eigen::Matrix<double, 10, 1> out = Eigen::Matrix<double, 10, 1>::Zero();
+    for (int k = 0; k < 3; k++) {
+        out += p1p1(M.row(i * 3 + k), M.row(j * 3 + k));
+    }
+    return out;
+}
 
-    for(int i = 0; i < im_vec.size() - 1; i++) {
-        generate_features(im_vec[i]);
-        generate_features(im_vec[i+1]);
-        Eigen::Matrix4d T;
-        chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
-        bool found_T = epipolar_constraints(cam_cfg_map, im_vec[i], im_vec[i+1], T);
-        chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
-        chrono::duration<double> time_used = chrono::duration_cast<chrono::duration<double>>(t2-t1);
-        //cout << "epipolar: " << 1.0 / time_used.count() << " Hz" << endl;
-        assert(found_T);
+Eigen::Matrix<double, 10, 1> lambda_at(Eigen::Matrix<double, 9, 4> M, int i,
+                                       int j) {
+    Eigen::Matrix<double, 10, 1> out = Eigen::Matrix<double, 10, 1>::Zero();
+    if (i == j) {
+        Eigen::Matrix<double, 10, 1> diag_sum =
+            Eigen::Matrix<double, 10, 1>::Zero();
+        for (int k = 0; k < 3; k++) {
+            diag_sum += upper_tri_at(M, k, k);
+        }
+        out = upper_tri_at(M, i, j) - 0.5 * diag_sum;
+    } else {
+        out = upper_tri_at(M, i, j);
+    }
+    return out;
+}
 
-        Twr = Twr * T;
-        poses.push_back(Twr);
+// Gauss Jordan Elimination with partial pivoting (stopping 4 rows before end)
+void gauss_jordan_partial(Eigen::Matrix<double, 10, 20> &A) {
+    Eigen::FullPivLU<Eigen::Matrix<double, 10, 20>> lu(A);
+    // upper tri matrix of A
+    Eigen::Matrix<double, 10, 20> U =
+        lu.matrixLU().triangularView<Eigen::Upper>();
 
-        Eigen::Isometry3d Twr_gt;
-        Twr_gt.translation() = im_vec[i]->T_global_cam.translation(); 
-        Twr_gt.linear() = im_vec[i]->T_global_cam.rotation(); 
-        poses_gt.push_back(Twr_gt);
-        //cout << "T=" << endl << T << endl;
+    // backsubstitution
+    for (int i = 9; i > 3; i--) {
+        for (int j = 9; j > i; j--) {
+            U.row(i) -= U.row(j) * U(i, j);
+        }
+        U.row(i) /= U(i, i);
+    }
+}
+
+Eigen::Vector4d triangulate_planes(Eigen::Vector3d kp1, Eigen::Vector3d kp2,
+                                   Eigen::Matrix3d E,
+                                   Eigen::Matrix<double, 3, 4> P) {
+    Eigen::Vector3d a, b, c, d;
+    Eigen::Vector4d C, Q;
+    a = E.transpose() * kp2;
+    Eigen::Vector3d diag;
+    diag << 1, 1, 0;
+    b = diag.asDiagonal() * a;
+    c = kp2.cross(diag.asDiagonal() * E * kp1);
+    C = P.transpose() * c;
+    d = a.cross(b);
+    Q.head<3>() = d.transpose() * C(3);
+    Q(3) = -1 * (d(0) * C(0) + d(1) * C(1) + d(2) * C(2));
+    return Q;
+}
+
+void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
+                Eigen::Matrix<double, 5, 3> &kps_norm2,
+                vector<Eigen::Affine3d> &transf_hyps) {
+    Eigen::Matrix<double, 5, 9> input_mat;
+
+    for (int i = 0; i < 5; i++) {
+        Eigen::Vector3d q = kps_norm1.row(i), q_prime = kps_norm2.row(i);
+        input_mat.row(i) << q(0) * q_prime(0), q(1) * q_prime(0),
+            q(2) * q_prime(0), q(0) * q_prime(1), q(1) * q_prime(1),
+            q(2) * q_prime(1), q(0) * q_prime(2), q(1) * q_prime(2),
+            q(2) * q_prime(2);
     }
 
+    // Extract right nullspace of input_mat
+    Eigen::FullPivLU<Eigen::Matrix<double, 5, 9>> lu(input_mat);
+    Eigen::Matrix<double, 9, 4> Q_nul = lu.kernel();
 
-    draw_trajectory({poses, poses_gt});
-    
-    return 0;
+    Eigen::Matrix3d X(Q_nul.col(0).data()), Y(Q_nul.col(1).data()),
+        Z(Q_nul.col(2).data()), W(Q_nul.col(3).data());
+    Eigen::Matrix<double, 9, 4> E_hat;
+
+    int E_i = 0;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            E_hat.row(E_i) << X(i, j), Y(i, j), Z(i, j), W(i, j);
+            E_i++;
+        }
+    }
+
+    Eigen::Matrix<double, 10, 20> A = Eigen::Matrix<double, 10, 20>::Zero();
+
+    // compute epipolar constraint
+    int A_i = 0;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            for (int k = 0; k < 3; k++) {
+                A.row(A_i) +=
+                    p2p1(lambda_at(E_hat, i, k), E_hat.row(k * 3 + j));
+            }
+            A_i++;
+        }
+    }
+
+    // compute det(E) = 0 constraint
+    A.row(9) = p2p1(p1p1(E_hat.row(1), E_hat.row(5)) -
+                        p1p1(E_hat.row(2), E_hat.row(4)),
+                    E_hat.row(6)) +
+               p2p1(p1p1(E_hat.row(2), E_hat.row(3)) -
+                        p1p1(E_hat.row(0), E_hat.row(5)),
+                    E_hat.row(7)) +
+               p2p1(p1p1(E_hat.row(0), E_hat.row(4)) -
+                        p1p1(E_hat.row(1), E_hat.row(3)),
+                    E_hat.row(8));
+
+    Eigen::Matrix<double, 10, 20> A_hat;
+
+    // move x * deg(z,2), y * deg(z,2), 1 * deg(z,3) to end of matrix
+    // from = [x3,y3,z3,x2y,y2x,x2z,z2x,z2y,y2z,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
+    // to   =
+    // [x3,y3,x2y,y2x,x2z,y2z,xyz,x2,y2,xy,|z2x,zx,x|,|z2y,zy,y|,|z3,z2,z,1|]
+    A_hat = A(Eigen::indexing::all, {0, 1,  3,  4, 5,  10, 8, 11, 9,  13,
+                                     6, 14, 16, 7, 15, 17, 2, 12, 18, 19});
+
+    gauss_jordan_partial(A_hat);
+
+    Eigen::Matrix<double, 3, 13> B;
+    Eigen::Matrix<double, 3, 4> Bx, By;
+    Eigen::Matrix<double, 3, 5> B1;
+
+    B.row(0) = sub_z3z4(A_hat.row(4).tail<10>(), A_hat.row(5).tail<10>());
+    B.row(1) = sub_z3z4(A_hat.row(6).tail<10>(), A_hat.row(7).tail<10>());
+    B.row(2) = sub_z3z4(A_hat.row(8).tail<10>(), A_hat.row(9).tail<10>());
+
+    for (int i = 0; i < 3; i++) {
+        Bx.row(i) = B.row(i).segment<4>(0);
+        By.row(i) = B.row(i).segment<4>(1);
+        B1.row(i) = B.row(i).tail<5>();
+    }
+
+    // n = det(B)
+    Eigen::Matrix<double, 8, 1> p1 = poly_mult<4, 5>(By.row(0), B1.row(1)) -
+                                     poly_mult<5, 4>(B1.row(0), By.row(1));
+    Eigen::Matrix<double, 8, 1> p2 = poly_mult<5, 4>(B1.row(0), Bx.row(1)) -
+                                     poly_mult<4, 5>(Bx.row(0), B1.row(1));
+    Eigen::Matrix<double, 7, 1> p3 = poly_mult<4, 4>(Bx.row(0), By.row(1)) -
+                                     poly_mult<4, 4>(By.row(0), Bx.row(1));
+    Eigen::Matrix<double, 11, 1> n = poly_mult<8, 4>(p1, Bx.row(2)) +
+                                     poly_mult<8, 4>(p2, By.row(2)) +
+                                     poly_mult<7, 5>(p3, B1.row(2));
+
+    // normalize
+    n /= n(10);
+
+    // Solve for roots
+    Eigen::Matrix<double, 10, 10> comp_mat =
+        Eigen::Matrix<double, 10, 10>::Zero();
+
+    comp_mat.row(0) = n.head<10>().reverse();
+    comp_mat.block<9, 9>(1, 0) = Eigen::Matrix<double, 9, 9>::Identity();
+    Eigen::ComplexEigenSolver<Eigen::Matrix<double, 10, 10>> eigensolver(
+        comp_mat);
+    if (eigensolver.info() != Eigen::Success) {
+        return;
+    }
+    Eigen::Matrix<complex<double>, 10, 1> roots = eigensolver.eigenvalues();
+
+    // generate transformation hypotheses
+    for (int i = 0; i < 10; i++) {
+        if (!is_zero(roots(i).imag())) {
+            continue;
+        }
+        double z = roots(i).real();
+        double x = eval_poly_at<8>(p1, z) / eval_poly_at<7>(p3, z);
+        double y = eval_poly_at<8>(p2, z) / eval_poly_at<7>(p3, z);
+
+        // Calculate E
+        Eigen::Matrix3d E = x * X + y * Y + z * Z + W;
+        Eigen::IOFormat fmt(3, 0, ", ", "\n", "[", "]");
+
+        // svd decomp to get U,V, enforce diag(U) = 1,1,0
+        Eigen::JacobiSVD<Eigen::Matrix3d> svd(E, Eigen::ComputeFullU |
+                                                     Eigen::ComputeFullV);
+
+        Eigen::Matrix3d U = svd.matrixU(), V = svd.matrixV();
+
+        if (U.determinant() < 0) {
+            U.col(2) *= -1;
+        }
+        if (V.determinant() < 0) {
+            V.col(2) *= -1;
+        }
+
+        Eigen::Vector3d diag;
+        diag << 1, 1, 0;
+        E = U * diag.asDiagonal() * V.transpose();
+
+        // Calculate Pa = [Ra|t]
+        Eigen::Matrix3d D;
+        Eigen::Matrix<double, 3, 4> P;
+        D << 0, 1, 0, -1, 0, 0, 0, 0, 1;
+        P.topLeftCorner<3, 3>() = U * D * V.transpose(); // rot
+        P.col(3) = U.col(2);                             // trans
+
+        Eigen::Vector4d Q =
+            triangulate_planes(kps_norm1.row(0), kps_norm2.row(0), E, P);
+
+        double c1 = Q(2) * Q(3);
+        double c2 = (P * Q)(2) * Q(3);
+
+        Eigen::Matrix4d Hr = Eigen::Matrix4d::Identity(); // reflection
+        Hr(3, 3) *= -1;
+
+        Eigen::Matrix4d Ht =
+            Eigen::Matrix4d::Identity(); // twisted pair transformation for R
+        Eigen::Vector3d ht_diag;
+        ht_diag << -1, -1, 1;
+
+        Ht.topLeftCorner<3, 3>() = V * ht_diag.asDiagonal() * V.transpose();
+
+        Eigen::Matrix4d Ht_q =
+            Eigen::Matrix4d::Identity(); // twisted pair transformation for Q
+        Ht_q.row(3).head<3>() = -2 * V.col(2);
+
+        // select valid transformation which results in pnts in front of both
+        // img planes, initially P = Pa
+        if (c1 < 0 && c2 < 0) {
+            // add reflection Pb = (Hr * Pa.T).T
+            P = (Hr * P.transpose()).transpose();
+        } else if (c1 * c2 < 0) {
+            // twisted pair Pc = Pb * Ht
+            P = P * Ht;
+            Q = Ht_q * Q;
+            if (Q(2) * Q(3) < 0) {
+                // add reflection Pd = (Hr * Pc.T).T
+                P = (Hr * P.transpose()).transpose();
+            }
+        }
+        Eigen::Affine3d T;
+        T.linear() = P.topLeftCorner<3, 3>();
+        T.translation() = P.col(3);
+        transf_hyps.push_back(T);
+    }
+}
+
+double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
+                      Eigen::Affine3d T) {
+    Eigen::Matrix3d t_skew = skew_sym(T.translation().head<3>());
+    Eigen::Vector3d e3;
+    e3 << 0, 0, 1;
+    Eigen::Matrix3d e3_skew_sym = skew_sym(e3);
+    double cost_numerator = q2.dot(t_skew * T.linear() * q1);
+    Eigen::Vector3d cost_denom_1 = e3_skew_sym * t_skew * T.linear() * q1;
+    Eigen::Vector3d cost_denom_2 =
+        q2.transpose() * t_skew * T.linear() * e3_skew_sym.transpose();
+    return cost_numerator * cost_numerator / cost_denom_1.squaredNorm() +
+           cost_numerator * cost_numerator / cost_denom_2.squaredNorm();
+}
+
+bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
+                          vector<Feature::Ptr> &feats1,
+                          vector<Feature::Ptr> &feats2, Eigen::Affine3d &T) {
+    vector<Eigen::Vector3d> kps_norm1, kps_norm2;
+    double time_used_av = 0;
+    int time_used_cnt = 0;
+    double min_error = -1.0;
+    int i;
+    for (i = 0; i < feats1.size() - 4; i += 5) {
+        vector<Eigen::Affine3d> tfs;
+        Eigen::Matrix<double, 5, 3> kps1, kps2;
+        for (int j = 0; j < 5; j++) {
+            kps1.row(j) = feats1[i + j]->to_hom();
+            kps2.row(j) = feats2[i + j]->to_hom();
+        }
+        chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
+        five_point(kps1, kps2, tfs);
+        chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
+        chrono::duration<double> time_used =
+            chrono::duration_cast<chrono::duration<double>>(t2 - t1);
+        time_used_av += time_used.count();
+        time_used_cnt++;
+
+        // error
+        int q6_ind = (i + 5) % feats1.size();
+        Eigen::Vector3d q6 = feats1[q6_ind]->to_hom();
+        Eigen::Vector3d q6_prime = feats2[q6_ind]->to_hom();
+
+        for (int j = 0; j < tfs.size(); j++) {
+            double err = epipolar_error(q6, q6_prime, tfs[j]);
+            if (min_error < 0) {
+                min_error = err;
+            } else {
+                min_error = min(err, min_error);
+                T = tfs[j];
+            }
+        }
+    }
+    cout << "Error: " << min_error << endl;
+
+    time_used_av /= time_used_cnt + 1;
+
+    cout << "five_point avg: " << time_used_av << "s" << endl;
+
+    return true;
 }
