@@ -59,7 +59,7 @@ void generate_matches(Image::Ptr im1, Image::Ptr im2,
 }
 
 // compute poly mult [x,y,z,1] x [x,y,z,1]
-// out = [x2,y2,z2,xy,xz,yz,x,y,1]
+// out = [x2,y2,z2,xy,xz,yz,x,y,z,1]
 Eigen::Matrix<double, 10, 1> p1p1(Eigen::Vector4d a, Eigen::Vector4d b) {
     Eigen::Matrix<double, 10, 1> out = Eigen::Matrix<double, 10, 1>::Zero();
     out(0) = a(0) * b(0);               // x2
@@ -71,7 +71,7 @@ Eigen::Matrix<double, 10, 1> p1p1(Eigen::Vector4d a, Eigen::Vector4d b) {
     out(6) = a(3) * b(0) + a(0) * b(3); // x
     out(7) = a(3) * b(1) + a(1) * b(3); // y
     out(8) = a(3) * b(2) + a(2) * b(3); // z
-    out(9) = a(3) * b(3) + a(3) * b(3); // 1
+    out(9) = a(3) * b(3);               // 1
     return out;
 }
 
@@ -126,12 +126,7 @@ Eigen::Matrix<double, 13, 1> sub_z3z4(Eigen::Matrix<double, 10, 1> a,
     return out;
 }
 
-// compute poly mult a * b
-// a = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
-// b = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
-// out = [z3x,z2x,zx,z3y,z2y,zy,z4,z3,z2,z]
-
-// compute poly mult [x2,y2,z2,xy,xz,yz,x,y,1] * [x,y,z,1]
+// compute poly mult [x2,y2,z2,xy,xz,yz,x,y,z,1] * [x,y,z,1]
 // out = [x3,y3,z3,x2y,y2x,x2z,z2x,z2y,y2z,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
 Eigen::Matrix<double, 20, 1> p2p1(Eigen::Matrix<double, 10, 1> a,
                                   Eigen::Vector4d b) {
@@ -143,8 +138,8 @@ Eigen::Matrix<double, 20, 1> p2p1(Eigen::Matrix<double, 10, 1> a,
     out(4) = a(1) * b(0) + a(3) * b(1);                // y2x
     out(5) = a(0) * b(2) + a(4) * b(0);                // x2z
     out(6) = a(2) * b(0) + a(4) * b(2);                // z2x
-    out(7) = a(1) * b(2) + a(5) * b(1);                // z2y
-    out(8) = a(2) * b(1) + a(5) * b(2);                // y2z
+    out(7) = a(1) * b(2) + a(5) * b(1);                // y2z
+    out(8) = a(2) * b(1) + a(5) * b(2);                // z2y
     out(9) = a(3) * b(2) + a(4) * b(1) + a(5) * b(0);  // xyz
     out(10) = a(0) * b(3) + a(6) * b(0);               // x2
     out(11) = a(1) * b(3) + a(7) * b(1);               // y2
@@ -274,11 +269,11 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
     Eigen::Matrix<double, 10, 20> A_hat;
 
     // move x * deg(z,2), y * deg(z,2), 1 * deg(z,3) to end of matrix
-    // from = [x3,y3,z3,x2y,y2x,x2z,z2x,z2y,y2z,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
+    // from = [x3,y3,z3,x2y,y2x,x2z,z2x,y2z,z2y,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
     // to   =
     // [x3,y3,x2y,y2x,x2z,y2z,xyz,x2,y2,xy,|z2x,zx,x|,|z2y,zy,y|,|z3,z2,z,1|]
-    A_hat = A(Eigen::indexing::all, {0, 1,  3,  4, 5,  10, 8, 11, 9,  13,
-                                     6, 14, 16, 7, 15, 17, 2, 12, 18, 19});
+    A_hat = A(Eigen::indexing::all, {0, 1,  3,  4, 5,  10, 7, 11, 9,  13,
+                                     6, 14, 16, 8, 15, 17, 2, 12, 18, 19});
 
     gauss_jordan_partial(A_hat);
 

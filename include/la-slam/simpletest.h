@@ -1,3 +1,7 @@
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
 #pragma once
 
 //---------------------------------------------------------------------------------
@@ -210,6 +214,17 @@ template <typename T> T TestDifference(T const &a, T const &b) {
     return a > b ? a - b : b - a;
 }
 
+static std::string array_str(double *a, const int a_r, const int a_c) {
+    std::stringstream ss(std::stringstream::in | std::stringstream::out);
+    for (int i = 0; i < a_r; i++) {
+        for (int j = 0; j < a_c; j++) {
+            ss << std::setprecision(3) << a[j * 3 + i] << ' ';
+        }
+        ss << std::endl;
+    }
+    return ss.str();
+}
+
 // why are these still needed?
 #define STR2(x) #x
 #define STR(x) STR2(x)
@@ -295,6 +310,15 @@ template <typename T> T TestDifference(T const &a, T const &b) {
                     eps) " when comparing %s and %s",                          \
                 TEST_TYPE_TO_STRING(test_value_, TestDifference(a, b)),        \
                 TEST_TYPE_TO_STRING(a, a), TEST_TYPE_TO_STRING(b, b));         \
+    TEST_END_
+
+// assumes .data() is column major
+#define TEST_MATd_EQ(a, b, a_r, a_c, b_r, b_c)                                 \
+    TEST_BEGIN_(a.isApprox(b));                                                \
+    TEST_CHECK_(a.isApprox(b), STR(a) " Differs from " STR(b),                 \
+                "\n" STR(a) ": \n %s\n" STR(b) ": \n %s",                      \
+                array_str(a.data(), a_r, a_c).c_str(),                         \
+                array_str(b.data(), b_r, b_c).c_str());                        \
     TEST_END_
 #define TEST_MESSAGE(cond, message, ...)                                       \
     TEST_BEGIN_(cond);                                                         \

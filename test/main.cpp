@@ -1,5 +1,6 @@
 #include <la-slam/common.h>
 #include <la-slam/simpletest.h>
+#include <la-slam/vo.h>
 
 using namespace std;
 
