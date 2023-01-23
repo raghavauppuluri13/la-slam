@@ -1,8 +1,12 @@
 # la-slam
 
-**Doesn't work and not clean yet**
+**Doesn't work yet**
 
 Monocular SLAM in CPP started on a drive to LA with some friends.
+
+For Monocular VO:
+- Uses [David Nister's 5 Point algorithm](https://ieeexplore.ieee.org/document/1288525) on correspondences to generate relative camera transformation hypotheses
+- Uses [David Nister's Preemptive RANSAC algorithm](https://ieeexplore.ieee.org/document/1238341) to select the correct hypothesis
 
 ### Dependencies
 - OpenCV (only basic image processing), most geometry is done from scratch 
@@ -22,7 +26,6 @@ Monocular SLAM in CPP started on a drive to LA with some friends.
 
 ### Benchmarking/Results
 
-- VO runs at ~150ms
 - Not accurate right now
 
 ### To-do
