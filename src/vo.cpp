@@ -4,6 +4,7 @@
 // 756-770.
 
 #include "la-slam/vo.h"
+#include <cstdlib>
 
 using namespace std;
 
@@ -47,15 +48,18 @@ void generate_matches(Image::Ptr im1, Image::Ptr im2,
         feats1.push_back(im1->features[match.queryIdx]);
         feats2.push_back(im2->features[match.trainIdx]);
     }
-    for (auto f : im1->features)
+    for (auto f : im1->features) {
         kps1.push_back(f->kp);
-    for (auto f : im2->features)
+    }
+    for (auto f : im2->features) {
         kps2.push_back(f->kp);
-
+    }
+    /*
     cv::Mat img_match;
     cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match);
     cv::imshow("all matches", img_match);
     cv::waitKey(0);
+    */
 }
 
 // compute poly mult [x,y,z,1] x [x,y,z,1]
@@ -203,12 +207,12 @@ Eigen::Vector4d triangulate_planes(Eigen::Vector3d kp1, Eigen::Vector3d kp2,
     a = E.transpose() * kp2;
     Eigen::Vector3d diag;
     diag << 1, 1, 0;
-    b = diag.asDiagonal() * a;
+    b = kp1.cross(diag.asDiagonal() * a);
     c = kp2.cross(diag.asDiagonal() * E * kp1);
     C = P.transpose() * c;
     d = a.cross(b);
     Q.head<3>() = d.transpose() * C(3);
-    Q(3) = -1 * (d(0) * C(0) + d(1) * C(1) + d(2) * C(2));
+    Q(3) = -1 * (d.dot(C.head<3>()));
     return Q;
 }
 
@@ -226,8 +230,12 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
     }
 
     // Extract right nullspace of input_mat
-    Eigen::FullPivLU<Eigen::Matrix<double, 5, 9>> lu(input_mat);
-    Eigen::Matrix<double, 9, 4> Q_nul = lu.kernel();
+    Eigen::MatrixXd Q;
+    Eigen::ColPivHouseholderQR<Eigen::Matrix<double, 9, 5>> qr(
+        input_mat.transpose());
+
+    Q = qr.householderQ();
+    Eigen::Matrix<double, 9, 4> Q_nul = Q.rightCols<4>();
 
     Eigen::Matrix3d X(Q_nul.col(0).data()), Y(Q_nul.col(1).data()),
         Z(Q_nul.col(2).data()), W(Q_nul.col(3).data());
@@ -269,12 +277,12 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
     Eigen::Matrix<double, 10, 20> A_hat;
 
     // move x * deg(z,2), y * deg(z,2), 1 * deg(z,3) to end of matrix
-    // from = [x3,y3,z3,x2y,y2x,x2z,z2x,y2z,z2y,xyz,x2,y2,z2,xy,xz,yz,x,y,1]
+    // from =
+    // [0-x3,1-y3,2-z3,3-x2y,4-y2x,5-x2z,6-z2x,7-y2z,8-z2y,9-xyz,10-x2,11-y2,12-z2,13-xy,14-xz,15-yz,16x,17y,18z,19-1]
     // to   =
-    // [x3,y3,x2y,y2x,x2z,y2z,xyz,x2,y2,xy,|z2x,zx,x|,|z2y,zy,y|,|z3,z2,z,1|]
-    A_hat = A(Eigen::indexing::all, {0, 1,  3,  4, 5,  10, 7, 11, 9,  13,
+    // [x3,y3,|x2y,y2x,x2z,y2z,xyz|,|x2,y2,xy|,|z2x,zx,x|,|z2y,zy,y|,|z3,z2,z,1|]
+    A_hat = A(Eigen::indexing::all, {0, 1,  3,  4, 5,  7,  9, 10, 11, 13,
                                      6, 14, 16, 8, 15, 17, 2, 12, 18, 19});
-
     gauss_jordan_partial(A_hat);
 
     Eigen::Matrix<double, 3, 13> B;
@@ -303,13 +311,13 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
                                      poly_mult<7, 5>(p3, B1.row(2));
 
     // normalize
-    n /= n(10);
+    n /= n(0);
 
     // Solve for roots
     Eigen::Matrix<double, 10, 10> comp_mat =
         Eigen::Matrix<double, 10, 10>::Zero();
 
-    comp_mat.row(0) = n.head<10>().reverse();
+    comp_mat.row(0) = -1 * n.tail<10>();
     comp_mat.block<9, 9>(1, 0) = Eigen::Matrix<double, 9, 9>::Identity();
     Eigen::ComplexEigenSolver<Eigen::Matrix<double, 10, 10>> eigensolver(
         comp_mat);
@@ -410,16 +418,18 @@ double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
            cost_numerator * cost_numerator / cost_denom_2.squaredNorm();
 }
 
+#define N 100
+#define B 15
+#define get_stage(i, M) int(M * pow(2, -1 * (i / B)))
+
 bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
                           vector<Feature::Ptr> &feats1,
                           vector<Feature::Ptr> &feats2, Eigen::Affine3d &T) {
+    assert(feats1.size() >= N);
     vector<Eigen::Vector3d> kps_norm1, kps_norm2;
+    vector<Eigen::Affine3d> tfs;
     double time_used_av = 0;
-    int time_used_cnt = 0;
-    double min_error = -1.0;
-    int i;
-    for (i = 0; i < feats1.size() - 4; i += 5) {
-        vector<Eigen::Affine3d> tfs;
+    for (int i = 1; i < N; i++) {
         Eigen::Matrix<double, 5, 3> kps1, kps2;
         for (int j = 0; j < 5; j++) {
             kps1.row(j) = feats1[i + j]->to_hom();
@@ -431,28 +441,41 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
         chrono::duration<double> time_used =
             chrono::duration_cast<chrono::duration<double>>(t2 - t1);
         time_used_av += time_used.count();
-        time_used_cnt++;
-
-        // error
-        int q6_ind = (i + 5) % feats1.size();
-        Eigen::Vector3d q6 = feats1[q6_ind]->to_hom();
-        Eigen::Vector3d q6_prime = feats2[q6_ind]->to_hom();
-
-        for (int j = 0; j < tfs.size(); j++) {
-            double err = epipolar_error(q6, q6_prime, tfs[j]);
-            if (min_error < 0) {
-                min_error = err;
-            } else {
-                min_error = min(err, min_error);
-                T = tfs[j];
-            }
-        }
     }
-    cout << "Error: " << min_error << endl;
 
-    time_used_av /= time_used_cnt + 1;
+    vector<int> obs_inds(N);
+    std::iota(begin(obs_inds), end(obs_inds), 0);
+    random_shuffle(begin(obs_inds), end(obs_inds));
 
-    cout << "five_point avg: " << time_used_av << "s" << endl;
+    vector<pair<double, int>> sorted_hyps;
+    for (int i = 0; i < tfs.size(); i++) {
+        pair<double, int> p;
+        p = make_pair(0, i);
+        sorted_hyps.push_back(p);
+    }
+
+    for (int i = 0; i < N && get_stage(i, tfs.size()) != 1; i++) {
+        int obs_ind = obs_inds[i];
+        int curr_block = get_stage(i, tfs.size());
+        for (int h = 0; h < curr_block; h++) {
+            Eigen::Vector3d q6 = feats1[obs_ind]->to_hom();
+            Eigen::Vector3d q6_prime = feats2[obs_ind]->to_hom();
+            double err = epipolar_error(q6, q6_prime, tfs[h]);
+            sorted_hyps[h].first = err;
+        }
+        sort(sorted_hyps.begin(), sorted_hyps.begin() + curr_block,
+             [](pair<double, int> l, pair<double, int> r) {
+                 return l.first < r.first;
+             });
+    }
+    T = tfs[sorted_hyps[0].second];
+
+    time_used_av /= N;
+    cout << "Error: " << sorted_hyps[0].first << endl;
+    // cout << "five_point avg: " << time_used_av << "s" << endl;
 
     return true;
 }
+#undef N
+#undef B
+#undef get_stage

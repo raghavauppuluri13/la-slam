@@ -9,8 +9,8 @@ using namespace std;
 #ifndef VO_H
 #define VO_H
 
-#define MATCH_MAX_DIST 30
-#define MAX_MATCHES 50
+#define MATCH_MAX_DIST 20
+#define MAX_MATCHES 100
 
 // correspondence
 void generate_features(Image::Ptr im);

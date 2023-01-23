@@ -51,3 +51,20 @@ DEFINE_TEST_G(TestPolynomialSubtractAzB, VO) {
     auto out = sub_z3z4(a, b);
     TEST_MATd_EQ(out, corr, 13, 1, 13, 1);
 }
+
+DEFINE_TEST_G(TestPolynomialMultNxN, VO) {
+    Eigen::Matrix<double, 5, 1> a;
+    Eigen::Matrix<double, 4, 1> b;
+
+    // 5x^4+1x^3+16x^2+13x+12
+    a << 5, 1, 16, 13, 12;
+
+    // 1x^3+2x^2+3x+4
+    b << 1, 2, 3, 4;
+
+    //  5 x^7 + 11 x^6 + 33 x^5 + 68 x^4 + 90 x^3 + 127 x^2 + 88 x + 48
+    Eigen::Matrix<double, 8, 1> corr;
+    corr << 5, 11, 33, 68, 90, 127, 88, 48;
+    auto out = poly_mult<5, 4>(a, b);
+    TEST_MATd_EQ(out, corr, 8, 1, 8, 1);
+}

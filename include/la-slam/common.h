@@ -3,9 +3,11 @@
 #include <fstream>
 #include <iostream>
 #include <math.h>
+#include <numeric> // std::iota
 #include <string>
 #include <unistd.h>
 #include <unordered_map>
+#include <utility> // std::pair
 
 // Eigen
 #include <Eigen/Core>
