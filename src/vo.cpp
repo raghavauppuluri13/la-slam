@@ -2,6 +2,10 @@
 // Nistér, D. (2004). An efficient solution to the five-point relative pose
 // problem. IEEE Transactions on Pattern Analysis and Machine Intelligence, 26,
 // 756-770.
+// and
+// Nister, "Preemptive RANSAC for live structure and motion estimation,"
+// Proceedings Ninth IEEE International Conference on Computer Vision, Nice,
+// France, 2003, pp. 199-206 vol.1, doi: 10.1109/ICCV.2003.1238341.
 
 #include "la-slam/vo.h"
 #include <cstdlib>
@@ -429,6 +433,8 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
     vector<Eigen::Vector3d> kps_norm1, kps_norm2;
     vector<Eigen::Affine3d> tfs;
     double time_used_av = 0;
+
+    // Hypothesis generation
     for (int i = 1; i < N; i++) {
         Eigen::Matrix<double, 5, 3> kps1, kps2;
         for (int j = 0; j < 5; j++) {
@@ -453,7 +459,7 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
         p = make_pair(0, i);
         sorted_hyps.push_back(p);
     }
-
+    // Preemptive RANSAC
     for (int i = 0; i < N && get_stage(i, tfs.size()) != 1; i++) {
         int obs_ind = obs_inds[i];
         int curr_block = get_stage(i, tfs.size());
