@@ -35,7 +35,6 @@ struct PinholeCameraModel {
     }
     Eigen::Vector3d project(Eigen::Vector3d pt) {
         Eigen::Vector3d uv = K * pt;
-        uv = uv / uv(2);
         return uv;
     }
 

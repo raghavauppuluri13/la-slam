@@ -29,41 +29,46 @@ void generate_features(Image::Ptr im) {
 void generate_matches(Image::Ptr im1, Image::Ptr im2,
                       vector<Feature::Ptr> &feats1,
                       vector<Feature::Ptr> &feats2) {
-    vector<cv::DMatch> matches, good_matches;
-    cv::Ptr<cv::DescriptorMatcher> matcher =
-        cv::DescriptorMatcher::create("BruteForce-Hamming");
-    matcher->match(im1->descriptors, im2->descriptors, matches);
+    vector<vector<cv::DMatch>> matches;
+    vector<cv::DMatch> good_matches;
+    cv::Ptr<cv::BFMatcher> matcher = cv::BFMatcher::create(cv::NORM_HAMMING);
+    matcher->knnMatch(im1->descriptors, im2->descriptors, matches, 2);
 
-    sort(matches.begin(), matches.end(),
-         [](cv::DMatch l, cv::DMatch r) { return l.distance < r.distance; });
+    vector<int> idx1, idx2;
+    unordered_set<int> idxs1, idxs2;
 
     for (auto match : matches) {
-        if (match.distance <= max(2.0 * matches[0].distance, 30.0)) {
-            good_matches.push_back(match);
+        cv::DMatch m = match[0], n = match[1];
+        if (m.distance < 0.75 * n.distance && m.distance < 32) {
+            if (idxs1.count(m.queryIdx) == 0 && idxs2.count(m.trainIdx) == 0) {
+                good_matches.push_back(match[0]);
+                feats1.push_back(im1->features[match[0].queryIdx]);
+                feats2.push_back(im2->features[match[0].trainIdx]);
+                idx1.push_back(match[0].queryIdx);
+                idx2.push_back(match[0].trainIdx);
+                idxs1.insert(match[0].queryIdx);
+                idxs2.insert(match[0].trainIdx);
+            }
         } else {
-            im1->features[match.queryIdx]->is_outlier = true;
-            im2->features[match.trainIdx]->is_outlier = true;
+            im1->features[match[0].queryIdx]->is_outlier = true;
+            im2->features[match[0].trainIdx]->is_outlier = true;
         }
     }
 
-    random_shuffle(good_matches.begin(), good_matches.end());
+    assert(idx1.size() == idxs1.size());
+    assert(idx2.size() == idxs2.size());
+
     vector<cv::KeyPoint> kps1, kps2;
-    for (auto match : good_matches) {
-        feats1.push_back(im1->features[match.queryIdx]);
-        feats2.push_back(im2->features[match.trainIdx]);
-    }
     for (auto f : im1->features) {
         kps1.push_back(f->kp);
     }
     for (auto f : im2->features) {
         kps2.push_back(f->kp);
     }
-    /*
     cv::Mat img_match;
-    cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match);
-    cv::imshow("all matches", img_match);
-    cv::waitKey(0);
-    */
+    // cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match);
+    // cv::imshow("all matches", img_match);
+    // cv::waitKey(0);
 }
 
 // compute poly mult [x,y,z,1] x [x,y,z,1]
@@ -220,13 +225,46 @@ Eigen::Vector4d triangulate_planes(Eigen::Vector3d kp1, Eigen::Vector3d kp2,
     return Q;
 }
 
-void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
-                Eigen::Matrix<double, 5, 3> &kps_norm2,
+void normalize_keypoints(Eigen::Matrix<double, 5, 3> &q,
+                         Eigen::Matrix<double, 5, 3> &q_prime,
+                         Eigen::Matrix3d &T_norm,
+                         Eigen::Matrix3d &T_norm_prime) {
+
+    Eigen::Vector3d mean_q = q.colwise().mean(),
+                    mean_q_prime = q_prime.colwise().mean();
+
+    q.rowwise() -= mean_q.transpose();
+    q_prime.rowwise() -= mean_q_prime.transpose();
+
+    double scale, scale_prime;
+
+    scale = sqrt(2) / q.norm() / q.rows();
+    scale_prime = sqrt(2) / q_prime.norm() / q_prime.rows();
+
+    q *= scale;
+    q_prime *= scale_prime;
+
+    q.col(2) = Eigen::Matrix<double, 5, 1>::Ones();
+    q_prime.col(2) = Eigen::Matrix<double, 5, 1>::Ones();
+
+    T_norm << scale, 0, -scale * mean_q(0), 0, scale, -scale * mean_q(1), 0, 0,
+        1;
+    T_norm_prime << scale_prime, 0, -scale_prime * mean_q_prime(0), 0,
+        scale_prime, -scale_prime * mean_q_prime(1), 0, 0, 1;
+}
+
+void five_point(Eigen::Matrix<double, 5, 3> &kps_hom1,
+                Eigen::Matrix<double, 5, 3> &kps_hom2,
                 vector<Eigen::Affine3d> &transf_hyps) {
+
+    Eigen::IOFormat fmt(3, 0, ", ", "\n", "[", "]");
+    Eigen::Matrix3d T_denorm_1, T_denorm_2;
+
+    normalize_keypoints(kps_hom1, kps_hom2, T_denorm_1, T_denorm_2);
     Eigen::Matrix<double, 5, 9> input_mat;
 
     for (int i = 0; i < 5; i++) {
-        Eigen::Vector3d q = kps_norm1.row(i), q_prime = kps_norm2.row(i);
+        Eigen::Vector3d q = kps_hom1.row(i), q_prime = kps_hom2.row(i);
         input_mat.row(i) << q(0) * q_prime(0), q(1) * q_prime(0),
             q(2) * q_prime(0), q(0) * q_prime(1), q(1) * q_prime(1),
             q(2) * q_prime(1), q(0) * q_prime(2), q(1) * q_prime(2),
@@ -316,16 +354,17 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
 
     // normalize
     n /= n(0);
-
     // Solve for roots
     Eigen::Matrix<double, 10, 10> comp_mat =
         Eigen::Matrix<double, 10, 10>::Zero();
 
     comp_mat.row(0) = -1 * n.tail<10>();
     comp_mat.block<9, 9>(1, 0) = Eigen::Matrix<double, 9, 9>::Identity();
+
     Eigen::ComplexEigenSolver<Eigen::Matrix<double, 10, 10>> eigensolver(
         comp_mat);
     if (eigensolver.info() != Eigen::Success) {
+        cout << "Solver failed" << endl;
         return;
     }
     Eigen::Matrix<complex<double>, 10, 1> roots = eigensolver.eigenvalues();
@@ -350,25 +389,28 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
         Eigen::Matrix3d U = svd.matrixU(), V = svd.matrixV();
 
         if (U.determinant() < 0) {
-            U.col(2) *= -1;
+            U *= -1;
         }
-        if (V.determinant() < 0) {
-            V.col(2) *= -1;
+        if (V.transpose().determinant() < 0) {
+            V *= -1;
         }
 
         Eigen::Vector3d diag;
         diag << 1, 1, 0;
         E = U * diag.asDiagonal() * V.transpose();
 
+        E = T_denorm_2.transpose() * E * T_denorm_1;
+
         // Calculate Pa = [Ra|t]
         Eigen::Matrix3d D;
-        Eigen::Matrix<double, 3, 4> P;
         D << 0, 1, 0, -1, 0, 0, 0, 0, 1;
+
+        Eigen::Matrix<double, 3, 4> P;
         P.topLeftCorner<3, 3>() = U * D * V.transpose(); // rot
         P.col(3) = U.col(2);                             // trans
 
         Eigen::Vector4d Q =
-            triangulate_planes(kps_norm1.row(0), kps_norm2.row(0), E, P);
+            triangulate_planes(kps_hom1.row(0), kps_hom2.row(0), E, P);
 
         double c1 = Q(2) * Q(3);
         double c2 = (P * Q)(2) * Q(3);
@@ -378,6 +420,7 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
 
         Eigen::Matrix4d Ht =
             Eigen::Matrix4d::Identity(); // twisted pair transformation for R
+
         Eigen::Vector3d ht_diag;
         ht_diag << -1, -1, 1;
 
@@ -391,10 +434,14 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
         // img planes, initially P = Pa
         if (c1 < 0 && c2 < 0) {
             // add reflection Pb = (Hr * Pa.T).T
+            // ref: 3.1 in Nister, Five-Point
             P = (Hr * P.transpose()).transpose();
         } else if (c1 * c2 < 0) {
             // twisted pair Pc = Pb * Ht
+            // ref: Section 9.6.3 of Hartley - Mutiple View Geometry
             P = P * Ht;
+
+            // ref: (17) in Nister, Five-Point
             Q = Ht_q * Q;
             if (Q(2) * Q(3) < 0) {
                 // add reflection Pd = (Hr * Pc.T).T
@@ -408,6 +455,10 @@ void five_point(Eigen::Matrix<double, 5, 3> &kps_norm1,
     }
 }
 
+// Log-likelihood scoring function for MLE in Preemptive RANSAC
+// function. Computes epipolar error associated with new obs (q1,q2) not used in
+// calculation of T. Reference material: Section 11.4 of
+// https://cseweb.ucsd.edu/classes/sp04/cse252b/notes/lec11/lec11.pdf
 double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
                       Eigen::Affine3d T) {
     Eigen::Matrix3d t_skew = skew_sym(T.translation().head<3>());
@@ -428,9 +479,9 @@ double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
 
 bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
                           vector<Feature::Ptr> &feats1,
-                          vector<Feature::Ptr> &feats2, Eigen::Affine3d &T) {
+                          vector<Feature::Ptr> &feats2, Eigen::Affine3d &T,
+                          Eigen::Affine3d &T_gt) {
     assert(feats1.size() >= N);
-    vector<Eigen::Vector3d> kps_norm1, kps_norm2;
     vector<Eigen::Affine3d> tfs;
     double time_used_av = 0;
 
@@ -485,3 +536,4 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
 #undef N
 #undef B
 #undef get_stage
+

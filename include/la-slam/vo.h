@@ -9,8 +9,7 @@ using namespace std;
 #ifndef VO_H
 #define VO_H
 
-#define MATCH_MAX_DIST 20
-#define MAX_MATCHES 100
+#define MATCH_MAX_DIST 30.0
 
 // correspondence
 void generate_features(Image::Ptr im);
@@ -57,6 +56,7 @@ double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
 
 bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
                           vector<Feature::Ptr> &feats1,
-                          vector<Feature::Ptr> &feats2, Eigen::Affine3d &T);
+                          vector<Feature::Ptr> &feats2, Eigen::Affine3d &T,
+                          Eigen::Affine3d &T_gt);
 
 #endif
