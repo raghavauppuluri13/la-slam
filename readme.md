@@ -19,10 +19,28 @@ For Monocular VO:
 ### Usage 
 
 1. Install dependencies
-2. Unzip contents of `sandbox` undistorted dataset from https://www.eth3d.net/datasets into `data/undistorted` folder
-3. Add build dir: `cmake --B build` 
+
+```
+# pangolin
+git clone https://github.com/stevenlovegrove/Pangolin.git
+cd Pangolin
+git checkout tags/v0.6
+
+# GNinja builds faster
+cmake -B build -GNinja
+cmake --build build
+sudo cmake --install build
+```
+
+2. Unzip contents of `sandbox` undistorted dataset from https://www.eth3d.net/datasets into `data/undistorted` folder (make sure the dataset structure is the same as in the docs)
+3. Add build dir: `cmake -B build -GNinja` 
 4. Build: `cmake --build build`
-5. Run VO: `./build/src/vo`
+5. To run VO on the `sandbox` dataset for example: 
+
+```
+ROOT_DIR=$(readlink -f .) DATASET_NAME="sandbox" ./build/src/main
+```
+6. Run tests: `./build/test/run_tests`
 
 ### Benchmarking/Results
 

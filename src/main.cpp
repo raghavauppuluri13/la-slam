@@ -10,8 +10,12 @@ int main(int argc, char **argv) {
     Trajectory3D poses;
     Trajectory3D poses_gt;
 
-    parse_cameras(cam_cfg_map);
-    parse_images(im_vec, cam_cfg_map);
+    std::string dataset_name = getenvstr("DATASET_NAME");
+
+    DatasetConfig dataset_cfg = cfg_map.at(dataset_name);
+
+    parse_cameras(cam_cfg_map, dataset_cfg);
+    parse_images(im_vec, cam_cfg_map, dataset_cfg);
 
     Eigen::Isometry3d Twr;
     Twr.translation() = im_vec[0]->T_global_cam.translation();
@@ -42,7 +46,7 @@ int main(int argc, char **argv) {
         chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
         chrono::duration<double> time_used =
             chrono::duration_cast<chrono::duration<double>>(t2 - t1);
-        // cout << "epipolar: " << 1.0 / time_used.count() << " Hz" << endl;
+        cout << "epipolar: " << 1.0 / time_used.count() << " Hz" << endl;
         assert(found_T);
 
         Twr = Twr.matrix() * T.matrix().inverse();

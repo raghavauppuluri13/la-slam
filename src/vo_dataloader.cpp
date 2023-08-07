@@ -1,9 +1,29 @@
 #include <la-slam/vo_dataloader.h>
 
-bool parse_cameras(CameraCfgPtrMap &cam_cfg_map) {
-    ifstream fin(CAMERA_CFG);
+void dataset_get_camera_cfg(DatasetConfig &cfg, std::string &pth) {
+    std::string root = getenvstr("ROOT_DIR");
+    pth = root + "/data/" + cfg.dataset_name + "/" + cfg.cfg_dir + "/" +
+          cfg.cam_cfg_name;
+}
+
+void dataset_get_image_cfg(DatasetConfig &cfg, std::string &pth) {
+    std::string root = getenvstr("ROOT_DIR");
+    pth = root + "/data/" + cfg.dataset_name + "/" + cfg.cfg_dir + "/" +
+          cfg.img_cfg_name;
+}
+
+void dataset_get_full_img_pth(DatasetConfig &cfg, std::string &rel_pth) {
+    std::string root = getenvstr("ROOT_DIR");
+    rel_pth = root + "/data/" + cfg.dataset_name + "/" + rel_pth;
+}
+
+bool parse_cameras(CameraCfgPtrMap &cam_cfg_map, DatasetConfig &data_cfg) {
+    std::string camera_cfg_pth;
+    dataset_get_camera_cfg(data_cfg, camera_cfg_pth);
+
+    ifstream fin(camera_cfg_pth);
     if (!fin) {
-        cout << "path doesn't exist: " << CAMERA_CFG << endl;
+        cout << "path doesn't exist: " << camera_cfg_pth << endl;
         return false;
     }
     while (!fin.eof() && !fin.bad()) {
@@ -30,12 +50,16 @@ bool parse_cameras(CameraCfgPtrMap &cam_cfg_map) {
     return true;
 }
 
-bool parse_images(vector<Image::Ptr> &im_vec, CameraCfgPtrMap &cam_cfg_map) {
+bool parse_images(vector<Image::Ptr> &im_vec, CameraCfgPtrMap &cam_cfg_map,
+                  DatasetConfig &data_cfg) {
 
-    ifstream fin(IMG_CFG);
+    std::string img_cfg_pth;
+    dataset_get_image_cfg(data_cfg, img_cfg_pth);
+
+    ifstream fin(img_cfg_pth);
 
     if (!fin) {
-        cout << "path doesn't exist: " << IMG_CFG << endl;
+        cout << "path doesn't exist: " << img_cfg_pth << endl;
         return false;
     }
     int cnt = 0;
@@ -58,13 +82,14 @@ bool parse_images(vector<Image::Ptr> &im_vec, CameraCfgPtrMap &cam_cfg_map) {
         im->T_cam_global.linear() = Eigen::Quaterniond(qw, qx, qy, qz).matrix();
         im->T_global_cam = im->T_cam_global.inverse();
         stringstream img_file_stream;
-        img_file_stream << IMGS_DIR << "/" << img_file;
+        img_file_stream << data_cfg.img_dir << "/" << img_file;
         img_file = img_file_stream.str();
+        dataset_get_full_img_pth(data_cfg, img_file);
         im->im = cv::imread(img_file);
         im->cam_cfg = cam_cfg_map[cam_id];
 
         if (im->im.data == nullptr) {
-            cout << "file does not exist" << img_file << endl;
+            cout << "file does not exist: " << img_file << endl;
             continue;
         }
 

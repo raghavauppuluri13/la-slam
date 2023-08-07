@@ -39,7 +39,7 @@ void generate_matches(Image::Ptr im1, Image::Ptr im2,
 
     for (auto match : matches) {
         cv::DMatch m = match[0], n = match[1];
-        if (m.distance < 0.75 * n.distance && m.distance < 32) {
+        if (m.distance < 1 * n.distance && m.distance < 100) {
             if (idxs1.count(m.queryIdx) == 0 && idxs2.count(m.trainIdx) == 0) {
                 good_matches.push_back(match[0]);
                 feats1.push_back(im1->features[match[0].queryIdx]);
@@ -65,7 +65,7 @@ void generate_matches(Image::Ptr im1, Image::Ptr im2,
     for (auto f : im2->features) {
         kps2.push_back(f->kp);
     }
-    cv::Mat img_match;
+    // cv::Mat img_match;
     // cv::drawMatches(im1->im, kps1, im2->im, kps2, good_matches, img_match);
     // cv::imshow("all matches", img_match);
     // cv::waitKey(0);
@@ -473,7 +473,7 @@ double epipolar_error(Eigen::Vector3d q1, Eigen::Vector3d q2,
            cost_numerator * cost_numerator / cost_denom_2.squaredNorm();
 }
 
-#define N 100
+#define N 50
 #define B 15
 #define get_stage(i, M) int(M * pow(2, -1 * (i / B)))
 
@@ -482,6 +482,7 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
                           vector<Feature::Ptr> &feats2, Eigen::Affine3d &T,
                           Eigen::Affine3d &T_gt) {
     assert(feats1.size() >= N);
+    cout << "MATCHES: " << feats1.size() << endl;
     vector<Eigen::Affine3d> tfs;
     double time_used_av = 0;
 
@@ -536,4 +537,3 @@ bool epipolar_constraints(Image::Ptr im1, Image::Ptr im2,
 #undef N
 #undef B
 #undef get_stage
-

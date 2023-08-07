@@ -9,3 +9,8 @@ Eigen::Matrix3d skew_sym(Eigen::Vector3d v) {
     t_skew << 0, -v(2), v(1), v(2), 0, -v(0), -v(1), v(0), 0;
     return t_skew;
 }
+
+std::string getenvstr(std::string const &key) {
+    char *val = getenv(key.c_str());
+    return val == NULL ? std::string("") : std::string(val);
+}

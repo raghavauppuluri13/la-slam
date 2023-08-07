@@ -38,3 +38,5 @@ cv::Point2f eigen_to_pt(Eigen::Vector3d v);
 bool is_zero(double n);
 
 Eigen::Matrix3d skew_sym(Eigen::Vector3d v);
+
+std::string getenvstr(std::string const &key);
