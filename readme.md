@@ -1,8 +1,19 @@
 # la-slam
 
+Monocular SLAM in CPP started on a drive to LA with some friends.
+
 **Doesn't work yet**
 
-Monocular SLAM in CPP started on a drive to LA with some friends.
+![vo-is-bad-like-really-bad](https://github.com/raghavauppuluri13/la-slam/assets/41026849/a4c89955-ffd9-486e-bd5c-e69b295a8fe9)
+
+I told you. (done on the `sandbox` dataset, ground truth is the green line)
+
+Things I have tried:
+- adding tests for the polynomial multiplication for sanity checking purposes
+- improving the match quality with the [Lowe's ratio test](https://stackoverflow.com/questions/51197091/how-does-the-lowes-ratio-test-work)
+- normalizing keypoints
+- adding preemptive ransac to filter out bad estimates, adding a log-likelihood scoring function
+- multiple datasets (`courtyard`,`sandbox`, `delivery_area`)
 
 For Monocular VO:
 - Uses [David Nister's 5 Point algorithm](https://ieeexplore.ieee.org/document/1288525) on correspondences to generate relative camera transformation hypotheses
