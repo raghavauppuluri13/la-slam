@@ -4,7 +4,7 @@
 using namespace std;
 using namespace Eigen;
 
-void draw_trajectory(std::initializer_list<Trajectory3D> poses_list) {
+void draw_trajectory(Trajectory3D poses_ground_truth, Trajectory3D poses) {
     // create pangolin window and plot the trajectory
     pangolin::CreateWindowAndBind("Trajectory Viewer", 1024, 768);
     glEnable(GL_DEPTH_TEST);
@@ -20,18 +20,20 @@ void draw_trajectory(std::initializer_list<Trajectory3D> poses_list) {
             .SetBounds(0.0, 1.0, 0.0, 1.0, -1024.0f / 768.0f)
             .SetHandler(new pangolin::Handler3D(s_cam));
 
+    std::vector<Trajectory3D> traj_list({poses_ground_truth, poses});
+
     while (pangolin::ShouldQuit() == false) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         d_cam.Activate(s_cam);
         glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
         glLineWidth(2);
-        for (auto poses : poses_list) {
-            for (size_t i = 0; i < poses.size(); i++) {
+        for (int i = 0; i < traj_list.size(); i++) {
+            for (int j = 0; j < traj_list[i].size(); j++) {
                 // 画每个位姿的三个坐标轴
-                Vector3d Ow = poses[i].translation();
-                Vector3d Xw = poses[i] * (0.1 * Vector3d(1, 0, 0));
-                Vector3d Yw = poses[i] * (0.1 * Vector3d(0, 1, 0));
-                Vector3d Zw = poses[i] * (0.1 * Vector3d(0, 0, 1));
+                Vector3d Ow = traj_list[i][j].translation();
+                Vector3d Xw = traj_list[i][j] * (0.1 * Vector3d(1, 0, 0));
+                Vector3d Yw = traj_list[i][j] * (0.1 * Vector3d(0, 1, 0));
+                Vector3d Zw = traj_list[i][j] * (0.1 * Vector3d(0, 0, 1));
                 glBegin(GL_LINES);
                 glColor3f(1.0, 0.0, 0.0);
                 glVertex3d(Ow[0], Ow[1], Ow[2]);
@@ -45,10 +47,14 @@ void draw_trajectory(std::initializer_list<Trajectory3D> poses_list) {
                 glEnd();
             }
             // 画出连线
-            for (size_t i = 0; i < poses.size(); i++) {
-                glColor3f(0.0, 0.0, 0.0);
+            for (size_t j = 0; j < traj_list[i].size(); j++) {
+                if (i == 0) {
+                    glColor3f(0.0, 1.0, 0.0);
+                } else {
+                    glColor3f(0.0, 0.0, 0.0);
+                }
                 glBegin(GL_LINES);
-                auto p1 = poses[i], p2 = poses[i + 1];
+                auto p1 = traj_list[i][j], p2 = traj_list[i][j + 1];
                 glVertex3d(p1.translation()[0], p1.translation()[1],
                            p1.translation()[2]);
                 glVertex3d(p2.translation()[0], p2.translation()[1],
@@ -83,6 +89,6 @@ int test_draw() {
     cout << "read total " << poses.size() << " pose entries" << endl;
 
     // draw trajectory in pangolin
-    draw_trajectory({poses});
+    draw_trajectory(poses, poses);
     return 0;
 }

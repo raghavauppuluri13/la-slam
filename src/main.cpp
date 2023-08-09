@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         // cout << "T=" << endl << T << endl;
     }
 
-    draw_trajectory({poses, poses_gt});
+    draw_trajectory(poses_gt, poses);
 
     return 0;
 }

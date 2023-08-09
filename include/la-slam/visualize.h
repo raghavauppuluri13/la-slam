@@ -7,4 +7,4 @@ using namespace std;
 using namespace Eigen;
 
 typedef vector<Isometry3d, Eigen::aligned_allocator<Isometry3d>> Trajectory3D;
-void draw_trajectory(std::initializer_list<Trajectory3D>);
+void draw_trajectory(Trajectory3D, Trajectory3D);

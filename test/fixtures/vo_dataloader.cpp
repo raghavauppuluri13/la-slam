@@ -15,5 +15,5 @@ class VO_Dataloader : TestFixture {
         parse_cameras(cam_cfg_map, data_cfg);
         parse_images(im_vec, cam_cfg_map, data_cfg);
     }
-    void TearDown() override { draw_trajectory({poses, poses_gt}); }
+    void TearDown() override { draw_trajectory(poses_gt, poses); }
 };
